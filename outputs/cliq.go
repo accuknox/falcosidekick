@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/falcosecurity/falcosidekick/types"
+	"github.com/google/uuid"
 )
 
 // Cliq API reference: https://www.zoho.com/cliq/help/restapi/v2/
@@ -65,7 +67,7 @@ type cliqPayload struct {
 	Slides []cliqSlide `json:"slides,omitempty"`
 }
 
-func newCliqPayload(falcopayload types.FalcoPayload, config *types.Configuration) cliqPayload {
+func newCliqPayload(kubearmorpayload types.KubearmorPayload, config *types.Configuration) cliqPayload {
 	var (
 		payload cliqPayload
 		field   cliqTableRow
@@ -76,7 +78,7 @@ func newCliqPayload(falcopayload types.FalcoPayload, config *types.Configuration
 
 	if config.Cliq.MessageFormatTemplate != nil {
 		buf := &bytes.Buffer{}
-		if err := config.Cliq.MessageFormatTemplate.Execute(buf, falcopayload); err != nil {
+		if err := config.Cliq.MessageFormatTemplate.Execute(buf, kubearmorpayload); err != nil {
 			log.Printf("[ERROR] : Cliq - Error expanding Cliq message %v", err)
 		} else {
 			payload.Text = buf.String()
@@ -84,38 +86,42 @@ func newCliqPayload(falcopayload types.FalcoPayload, config *types.Configuration
 			if config.Cliq.OutputFormat == All || config.Cliq.OutputFormat == Text || config.Cliq.OutputFormat == "" {
 				slide := cliqSlide{
 					Type: textSlideType,
-					Data: falcopayload.Output,
+					Data: kubearmorpayload.EventType,
 				}
 				payload.Slides = append(payload.Slides, slide)
 			}
 		}
 	} else {
-		payload.Text = falcopayload.Output
+		payload.Text = kubearmorpayload.EventType
 	}
 
 	if config.Cliq.OutputFormat == All || config.Cliq.OutputFormat == Fields || config.Cliq.OutputFormat == "" {
-		field.Field = Rule
-		field.Value = falcopayload.Rule
+		field.Field = "Event"
+		field.Value = kubearmorpayload.EventType
 		table.Rows = append(table.Rows, field)
 
-		field.Field = Priority
-		field.Value = falcopayload.Priority.String()
-		table.Rows = append(table.Rows, field)
-
-		if falcopayload.Hostname != "" {
+		if kubearmorpayload.Hostname != "" {
 			field.Field = Hostname
-			field.Value = falcopayload.Hostname
+			field.Value = kubearmorpayload.Hostname
 			table.Rows = append(table.Rows, field)
 		}
 
-		for _, i := range getSortedStringKeys(falcopayload.OutputFields) {
-			field.Field = i
-			field.Value = falcopayload.OutputFields[i].(string)
-			table.Rows = append(table.Rows, field)
+		for _, i := range getSortedStringKeys(kubearmorpayload.OutputFields) {
+			j := kubearmorpayload.OutputFields[i]
+			switch j.(type) {
+			case string:
+				field.Field = i
+				field.Value = kubearmorpayload.OutputFields[i].(string)
+				table.Rows = append(table.Rows, field)
+			default:
+				field.Field = i
+				field.Value = fmt.Sprint(j)
+				table.Rows = append(table.Rows, field)
+			}
 		}
 
 		field.Field = Time
-		field.Value = falcopayload.Time.String()
+		field.Value = fmt.Sprint(kubearmorpayload.Timestamp)
 		table.Rows = append(table.Rows, field)
 
 		table.Headers = tableSlideHeaders
@@ -128,23 +134,11 @@ func newCliqPayload(falcopayload types.FalcoPayload, config *types.Configuration
 
 	if config.Cliq.UseEmoji {
 		var emoji rune
-		switch falcopayload.Priority {
-		case types.Emergency:
-			emoji = emergencyEmoji
-		case types.Alert:
+		switch kubearmorpayload.EventType {
+		case "Alert":
 			emoji = errorEmoji
-		case types.Critical:
-			emoji = errorEmoji
-		case types.Error:
-			emoji = emergencyEmoji
-		case types.Warning:
-			emoji = warningEmoji
-		case types.Notice:
-			emoji = noticeEmoji
-		case types.Informational:
+		case "Log":
 			emoji = informationEmoji
-		case types.Debug:
-			emoji = debugEmoji
 		default:
 			emoji = '?'
 		}
@@ -161,13 +155,13 @@ func newCliqPayload(falcopayload types.FalcoPayload, config *types.Configuration
 }
 
 // CliqPost posts event to cliq
-func (c *Client) CliqPost(falcopayload types.FalcoPayload) {
+func (c *Client) CliqPost(KubearmorPayload types.KubearmorPayload) {
 	c.Stats.Cliq.Add(Total, 1)
 
 	c.httpClientLock.Lock()
 	defer c.httpClientLock.Unlock()
 	c.AddHeader(ContentTypeHeaderKey, "application/json")
-	err := c.Post(newCliqPayload(falcopayload, c.Config))
+	err := c.Post(newCliqPayload(KubearmorPayload, c.Config))
 	if err != nil {
 		go c.CountMetric(Outputs, 1, []string{"output:cliq", "status:error"})
 		c.Stats.Cliq.Add(Error, 1)
@@ -180,4 +174,27 @@ func (c *Client) CliqPost(falcopayload types.FalcoPayload) {
 	go c.CountMetric(Outputs, 1, []string{"output:cliq", "status:ok"})
 	c.Stats.Cliq.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "cliq", "status": OK}).Inc()
+}
+
+func (c *Client) WatchCliqPostAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.CliqPost(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
+	return nil
 }

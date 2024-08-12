@@ -6,12 +6,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/DataDog/datadog-go/statsd"
@@ -27,7 +25,7 @@ func isSourcePresent(config *types.Configuration) (bool, error) {
 
 	client := &http.Client{}
 
-	source_url, err := url.JoinPath(config.Spyderbat.APIUrl, APIv1Path+config.Spyderbat.OrgUID+SourcePath)
+	source_url, err := url.JoinPath(config.Spyderbat.APIUrl, "api/v1/org/"+config.Spyderbat.OrgUID+"/source/")
 	if err != nil {
 		return false, err
 	}
@@ -35,7 +33,7 @@ func isSourcePresent(config *types.Configuration) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	req.Header.Add("Authorization", Bearer+" "+config.Spyderbat.APIKey)
+	req.Header.Add("Authorization", "Bearer "+config.Spyderbat.APIKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -46,7 +44,7 @@ func isSourcePresent(config *types.Configuration) (bool, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return false, err
 	}
@@ -54,7 +52,7 @@ func isSourcePresent(config *types.Configuration) (bool, error) {
 	if err := json.Unmarshal(body, &sources); err != nil {
 		return false, err
 	}
-	uid := Falcosidekick_ + config.Spyderbat.OrgUID
+	uid := "kubearmor_" + config.Spyderbat.OrgUID
 	for _, source := range sources {
 		if id, ok := source["uid"]; ok && id.(string) == uid {
 			return true, nil
@@ -74,7 +72,7 @@ func makeSource(config *types.Configuration) error {
 	data := SourceBody{
 		Name:        config.Spyderbat.Source,
 		Description: config.Spyderbat.SourceDescription,
-		UID:         Falcosidekick_ + config.Spyderbat.OrgUID,
+		UID:         "kubearmor_" + config.Spyderbat.OrgUID,
 	}
 	body := new(bytes.Buffer)
 	if err := json.NewEncoder(body).Encode(data); err != nil {
@@ -83,7 +81,7 @@ func makeSource(config *types.Configuration) error {
 
 	client := &http.Client{}
 
-	source_url, err := url.JoinPath(config.Spyderbat.APIUrl, APIv1Path+config.Spyderbat.OrgUID+SourcePath)
+	source_url, err := url.JoinPath(config.Spyderbat.APIUrl, "api/v1/org/"+config.Spyderbat.OrgUID+"/source/")
 	if err != nil {
 		return err
 	}
@@ -91,7 +89,7 @@ func makeSource(config *types.Configuration) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Add("Authorization", Bearer+" "+config.Spyderbat.APIKey)
+	req.Header.Add("Authorization", "Bearer "+config.Spyderbat.APIKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -99,7 +97,7 @@ func makeSource(config *types.Configuration) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusBadRequest {
-			if b, err := io.ReadAll(resp.Body); err == nil {
+			if b, err := ioutil.ReadAll(resp.Body); err == nil {
 				return errors.New("Bad request: " + string(b))
 			}
 		}
@@ -110,17 +108,17 @@ func makeSource(config *types.Configuration) error {
 	return nil
 }
 
-const Schema = "falco_alert::1.0.0"
+const Schema = "kubearmor_alert::1.0.0"
 
-var PriorityMap = map[types.PriorityType]string{
-	types.Emergency:     "critical",
-	types.Alert:         "high",
-	types.Critical:      "critical",
-	types.Error:         "high",
-	types.Warning:       "medium",
-	types.Notice:        "low",
-	types.Informational: "info",
-	types.Debug:         "info",
+var PriorityMap = map[string]string{
+	"types.Emergency": "critical",
+	"Alert":           "high",
+	"types.Critical":  "critical",
+	"types.Error":     "high",
+	"types.Warning":   "medium",
+	"types.Notice":    "low",
+	"Log":             "info",
+	"types.Debug":     "info",
 }
 
 type spyderbatPayload struct {
@@ -136,38 +134,14 @@ type spyderbatPayload struct {
 	Container     string   `json:"container"`
 }
 
-func newSpyderbatPayload(falcopayload types.FalcoPayload) (spyderbatPayload, error) {
+func newSpyderbatPayload(kubearmorpayload types.KubearmorPayload) (spyderbatPayload, error) {
 	nowTime := float64(time.Now().UnixNano()) / 1000000000
 
-	timeStr := falcopayload.OutputFields["evt.time"]
-	if timeStr == nil {
-		errStr := fmt.Sprintf("evt.time is nil for rule %s", falcopayload.Rule)
-		return spyderbatPayload{}, errors.New(errStr)
-	}
-	jsonTime, err := timeStr.(json.Number).Int64()
-	if err != nil {
-		return spyderbatPayload{}, err
-	}
-	eventTime := float64(jsonTime / 1000000000.0)
+	eventTime := float64(kubearmorpayload.Timestamp / 1000000000.0)
 
-	pidStr := falcopayload.OutputFields["proc.pid"]
-	if pidStr == nil {
-		errStr := fmt.Sprintf("proc.pid is nil for rule %s", falcopayload.Rule)
-		return spyderbatPayload{}, errors.New(errStr)
-	}
-	pid, err := pidStr.(json.Number).Int64()
-	if err != nil {
-		return spyderbatPayload{}, err
-	}
-
-	level := PriorityMap[falcopayload.Priority]
-	args := strings.Split(falcopayload.Output, " ")
-	var message []string
-	if len(args) > 2 {
-		message = args[2:]
-	}
-	arguments := falcopayload.OutputFields["proc.cmdline"].(string)
-	container := falcopayload.OutputFields["container.id"].(string)
+	level := PriorityMap[kubearmorpayload.EventType]
+	arguments := kubearmorpayload.OutputFields["proc.cmdline"].(string)
+	container := kubearmorpayload.OutputFields["container.id"].(string)
 
 	return spyderbatPayload{
 		Schema:        Schema,
@@ -175,9 +149,8 @@ func newSpyderbatPayload(falcopayload types.FalcoPayload) (spyderbatPayload, err
 		MonotonicTime: time.Now().Nanosecond(),
 		OrcTime:       nowTime,
 		Time:          eventTime,
-		PID:           int32(pid),
+		PID:           int32(kubearmorpayload.OutputFields["PID"].(int32)),
 		Level:         level,
-		Message:       message,
 		Arguments:     arguments,
 		Container:     container,
 	}, nil
@@ -200,8 +173,8 @@ func NewSpyderbatClient(config *types.Configuration, stats *types.Statistics, pr
 		}
 	}
 
-	source := Falcosidekick_ + config.Spyderbat.OrgUID
-	data_url, err := url.JoinPath(config.Spyderbat.APIUrl, APIv1Path+config.Spyderbat.OrgUID+SourcePath+source+"/data/sb-agent")
+	source := "kubearmor_" + config.Spyderbat.OrgUID
+	data_url, err := url.JoinPath(config.Spyderbat.APIUrl, "api/v1/org/"+config.Spyderbat.OrgUID+"/source/"+source+"/data/sb-agent")
 	if err != nil {
 		log.Printf("[ERROR] : Spyderbat - %v\n", err.Error())
 		return nil, ErrClientCreation
@@ -225,7 +198,7 @@ func NewSpyderbatClient(config *types.Configuration, stats *types.Statistics, pr
 	}, nil
 }
 
-func (c *Client) SpyderbatPost(falcopayload types.FalcoPayload) {
+func (c *Client) SpyderbatPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Spyderbat.Add(Total, 1)
 
 	c.httpClientLock.Lock()
@@ -233,7 +206,7 @@ func (c *Client) SpyderbatPost(falcopayload types.FalcoPayload) {
 	c.AddHeader("Authorization", "Bearer "+c.Config.Spyderbat.APIKey)
 	c.AddHeader("Content-Encoding", "gzip")
 
-	payload, err := newSpyderbatPayload(falcopayload)
+	payload, err := newSpyderbatPayload(kubearmorpayload)
 	if err == nil {
 		err = c.Post(payload)
 	}

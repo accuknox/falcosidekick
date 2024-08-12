@@ -5,12 +5,14 @@ package outputs
 import (
 	"log"
 	"strings"
+	"time"
 
 	"github.com/falcosecurity/falcosidekick/types"
+	"github.com/google/uuid"
 )
 
 // WebhookPost posts event to an URL
-func (c *Client) WebhookPost(falcopayload types.FalcoPayload) {
+func (c *Client) WebhookPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Webhook.Add(Total, 1)
 
 	if len(c.Config.Webhook.CustomHeaders) != 0 {
@@ -22,9 +24,9 @@ func (c *Client) WebhookPost(falcopayload types.FalcoPayload) {
 	}
 	var err error
 	if strings.ToUpper(c.Config.Webhook.Method) == HttpPut {
-		err = c.Put(falcopayload)
+		err = c.Put(kubearmorpayload)
 	} else {
-		err = c.Post(falcopayload)
+		err = c.Post(kubearmorpayload)
 	}
 
 	if err != nil {
@@ -39,4 +41,27 @@ func (c *Client) WebhookPost(falcopayload types.FalcoPayload) {
 	go c.CountMetric(Outputs, 1, []string{"output:webhook", "status:ok"})
 	c.Stats.Webhook.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "webhook", "status": OK}).Inc()
+}
+
+func (c *Client) WatchWebhookAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.WebhookPost(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
+	return nil
 }

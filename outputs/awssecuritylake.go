@@ -99,7 +99,7 @@ type OCSFProduct struct {
 	Name       string `json:"name" parquet:"name=name, type=BYTE_ARRAY, convertedtype=UTF8"`
 }
 
-func NewOCSFSecurityFinding(falcopayload types.FalcoPayload) OCSFSecurityFinding {
+func NewOCSFSecurityFinding(kubearmorpayload types.KubearmorPayload) OCSFSecurityFinding {
 	ocsfsf := OCSFSecurityFinding{
 		ActivityID:   1,
 		ActivityName: "Generate",
@@ -109,32 +109,31 @@ func NewOCSFSecurityFinding(falcopayload types.FalcoPayload) OCSFSecurityFinding
 		ClassUID:     2001,
 		TypeUID:      200101,
 		TypeName:     "Security Finding: Generate",
-		// Attacks: getMitreAttacke(falcopayload.Tags),
+		// Attacks: getMitreAttacke(kubearmorpayload.Tags),
 		Metadata: OCSFMetadata{
-			Labels: falcopayload.Tags,
+			Labels: []string{kubearmorpayload.OutputFields["Labels"].(string)},
 			Product: OCSFProduct{
-				Name:       "Falco",
-				VendorName: "Falcosecurity",
+				Name:       "Kubearmor",
+				VendorName: "Accuknox",
 			},
 			Version: schemaVersion,
 		},
-		RawData: falcopayload.String(),
+		RawData: kubearmorpayload.String(),
 		State:   "New",
 		StateID: 1,
 		Finding: OCSFFIndingDetails{
-			CreatedTime: falcopayload.Time.UnixMilli(),
-			Desc:        falcopayload.Output,
-			Title:       falcopayload.Rule,
-			Types:       []string{falcopayload.Source},
-			UID:         falcopayload.UUID,
+			CreatedTime: kubearmorpayload.Timestamp,
+			Desc:        kubearmorpayload.EventType,
+			Title:       kubearmorpayload.OutputFields["PodName"].(string) + "-" + kubearmorpayload.EventType,
+			UID:         kubearmorpayload.OutputFields["UID"].(string),
 		},
-		Message:     falcopayload.Rule,
-		Observables: getObservables(falcopayload.Hostname, falcopayload.OutputFields),
-		Timestamp:   falcopayload.Time.UnixMilli(),
-		Status:      falcopayload.Priority.String(),
+		Message:     kubearmorpayload.EventType + "-" + kubearmorpayload.ClusterName + "-" + kubearmorpayload.OutputFields["PodName"].(string),
+		Observables: getObservables(kubearmorpayload.Hostname, kubearmorpayload.OutputFields),
+		Timestamp:   kubearmorpayload.Timestamp,
+		Status:      kubearmorpayload.EventType,
 	}
 
-	ocsfsf.SeverityID, ocsfsf.Severity = getAWSSecurityLakeSeverity(falcopayload.Priority)
+	ocsfsf.SeverityID, ocsfsf.Severity = 0, ""
 	return ocsfsf
 }
 
@@ -197,8 +196,8 @@ func getAWSSecurityLakeSeverity(priority types.PriorityType) (int32, string) {
 // 	return ocsfa
 // }
 
-func (c *Client) EnqueueSecurityLake(falcopayload types.FalcoPayload) {
-	offset, err := c.Config.AWS.SecurityLake.Memlog.Write(c.Config.AWS.SecurityLake.Ctx, []byte(falcopayload.String()))
+func (c *Client) EnqueueSecurityLake(kubearmorpayload types.KubearmorPayload) {
+	offset, err := c.Config.AWS.SecurityLake.Memlog.Write(c.Config.AWS.SecurityLake.Ctx, []byte(kubearmorpayload.String()))
 	if err != nil {
 		go c.CountMetric(Outputs, 1, []string{"output:awssecuritylake.", "status:error"})
 		c.Stats.AWSSecurityLake.Add(Error, 1)
@@ -206,7 +205,7 @@ func (c *Client) EnqueueSecurityLake(falcopayload types.FalcoPayload) {
 		log.Printf("[ERROR] : %v SecurityLake - %v\n", c.OutputType, err)
 		return
 	}
-	log.Printf("[INFO]  : %v SecurityLake - Event queued (%v)\n", c.OutputType, falcopayload.UUID)
+	log.Printf("[INFO]  : %v SecurityLake - Event queued (%v)\n", c.OutputType, kubearmorpayload.OutputFields["UID"].(string))
 	*c.Config.AWS.SecurityLake.WriteOffset = offset
 }
 
@@ -323,7 +322,7 @@ func (c *Client) writeParquet(uid string, records []memlog.Record) error {
 		return err
 	}
 	for _, i := range records {
-		var f types.FalcoPayload
+		var f types.KubearmorPayload
 		if err := json.Unmarshal(i.Data, &f); err != nil {
 			log.Printf("[ERROR] : %v SecurityLake - Unmarshalling error: %v\n", c.OutputType, err)
 			continue
@@ -341,5 +340,29 @@ func (c *Client) writeParquet(uid string, records []memlog.Record) error {
 		log.Printf("[ERROR] : %v SecurityLake - Can't close the parquet file %s.parquet: %v\n", c.OutputType, uid, err)
 		return err
 	}
+	return nil
+}
+
+// EnqueueSecurityLake
+func (c *Client) WatchEnqueueSecurityLakeAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.EnqueueSecurityLake(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
 	return nil
 }

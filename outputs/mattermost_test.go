@@ -64,7 +64,7 @@ func TestMattermostPayload(t *testing.T) {
 		},
 	}
 
-	var f types.FalcoPayload
+	var f types.KubearmorPayload
 	require.Nil(t, json.Unmarshal([]byte(falcoTestInput), &f))
 	config := &types.Configuration{
 		Mattermost: types.MattermostOutputConfig{

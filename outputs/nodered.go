@@ -10,7 +10,7 @@ import (
 )
 
 // NodeRedPost posts event to Slack
-func (c *Client) NodeRedPost(falcopayload types.FalcoPayload) {
+func (c *Client) NodeRedPost(falcopayload types.KubearmorPayload) {
 	c.Stats.NodeRed.Add(Total, 1)
 
 	c.httpClientLock.Lock()

@@ -18,8 +18,6 @@ import (
 	"github.com/DataDog/datadog-go/statsd"
 	"github.com/embano1/memlog"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/falcosecurity/falcosidekick/outputs"
 	"github.com/falcosecurity/falcosidekick/types"
 )
@@ -236,7 +234,7 @@ func init() {
 		} else {
 			if config.Elasticsearch.CreateIndexTemplate {
 				elasticsearchClient.EndpointURL, _ = url.Parse(fmt.Sprintf("%s/_index_template/falco", config.Elasticsearch.HostPort))
-				err = elasticsearchClient.ElasticsearchCreateIndexTemplate(config.Elasticsearch)
+				// err = elasticsearchClient.ElasticsearchCreateIndexTemplate(config.Elasticsearch)
 			}
 		}
 		if err != nil {
@@ -373,7 +371,7 @@ func init() {
 				if config.AWS.SecurityLake.Interval < 5 {
 					config.AWS.SecurityLake.Interval = 5
 				}
-				go awsClient.StartSecurityLakeWorker()
+				// go awsClient.StartSecurityLakeWorker()
 				if err != nil {
 					config.AWS.SecurityLake.Region = ""
 					config.AWS.SecurityLake.Bucket = ""
@@ -675,16 +673,16 @@ func init() {
 		}
 	}
 
-	if config.MQTT.Broker != "" {
-		var err error
-		mqttClient, err = outputs.NewMQTTClient(config, stats, promStats, statsdClient, dogstatsdClient)
-		if err != nil {
-			config.MQTT.Broker = ""
-			log.Printf("[ERROR] : MQTT - %v\n", err)
-		} else {
-			outputs.EnabledOutputs = append(outputs.EnabledOutputs, "MQTT")
-		}
-	}
+	// if config.MQTT.Broker != "" {
+	// 	var err error
+	// 	mqttClient, err = outputs.NewMQTTClient(config, stats, promStats, statsdClient, dogstatsdClient)
+	// 	if err != nil {
+	// 		config.MQTT.Broker = ""
+	// 		log.Printf("[ERROR] : MQTT - %v\n", err)
+	// 	} else {
+	// 		outputs.EnabledOutputs = append(outputs.EnabledOutputs, "MQTT")
+	// 	}
+	// }
 
 	if config.Zincsearch.HostPort != "" {
 		var err error
@@ -823,38 +821,38 @@ func main() {
 		log.Printf("[INFO]  : Debug mode : %v", config.Debug)
 	}
 
-	routes := map[string]http.Handler{
-		"/":        http.HandlerFunc(mainHandler),
-		"/ping":    http.HandlerFunc(pingHandler),
-		"/healthz": http.HandlerFunc(healthHandler),
-		"/test":    http.HandlerFunc(testHandler),
-		"/metrics": promhttp.Handler(),
-	}
+	// routes := map[string]http.Handler{
+	// 	"/":        http.HandlerFunc(mainHandler),
+	// 	"/ping":    http.HandlerFunc(pingHandler),
+	// 	"/healthz": http.HandlerFunc(healthHandler),
+	// 	"/test":    http.HandlerFunc(testHandler),
+	// 	"/metrics": promhttp.Handler(),
+	// }
 
 	mainServeMux := http.NewServeMux()
 	var HTTPServeMux *http.ServeMux
 
 	// configure HTTP routes requested by NoTLSPath config
-	if config.TLSServer.Deploy {
-		HTTPServeMux = http.NewServeMux()
-		for _, r := range config.TLSServer.NoTLSPaths {
-			handler, ok := routes[r]
-			if ok {
-				delete(routes, r)
-				if config.Debug {
-					log.Printf("[DEBUG] : %s is served on http", r)
-				}
-				HTTPServeMux.Handle(r, handler)
-			} else {
-				log.Printf("[WARN] : tlsserver.notlspaths has unknown path '%s'", r)
-			}
-		}
-	}
+	// if config.TLSServer.Deploy {
+	// 	HTTPServeMux = http.NewServeMux()
+	// 	for _, r := range config.TLSServer.NoTLSPaths {
+	// 		handler, ok := routes[r]
+	// 		if ok {
+	// 			delete(routes, r)
+	// 			if config.Debug {
+	// 				log.Printf("[DEBUG] : %s is served on http", r)
+	// 			}
+	// 			HTTPServeMux.Handle(r, handler)
+	// 		} else {
+	// 			log.Printf("[WARN] : tlsserver.notlspaths has unknown path '%s'", r)
+	// 		}
+	// 	}
+	// }
 
-	// configure main server routes
-	for r, handler := range routes {
-		mainServeMux.Handle(r, handler)
-	}
+	// // configure main server routes
+	// for r, handler := range routes {
+	// 	mainServeMux.Handle(r, handler)
+	// }
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", config.ListenAddress, config.ListenPort),

@@ -5,7 +5,6 @@ package outputs
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strconv"
 
@@ -38,29 +37,31 @@ func NewOpenfaasClient(config *types.Configuration, stats *types.Statistics, pro
 			KubernetesClient: clientset,
 		}, nil
 	}
-
-	endpointUrl := fmt.Sprintf("http://%s.%s:%d/function/%s.%s", config.Openfaas.GatewayService, config.Openfaas.GatewayNamespace, config.Openfaas.GatewayPort, config.Openfaas.FunctionName, config.Openfaas.FunctionNamespace)
 	initClientArgs := &types.InitClientArgs{
 		Config:          config,
 		Stats:           stats,
 		DogstatsdClient: dogstatsdClient,
 		PromStats:       promStats,
-		StatsdClient:    statsdClient,
 	}
-
-	return NewClient(Openfaas, endpointUrl, config.Openfaas.MutualTLS, config.Openfaas.CheckCert, *initClientArgs)
+	return NewClient(
+		Openfaas,
+		"http://"+config.Openfaas.GatewayService+"."+config.Openfaas.GatewayNamespace+":"+strconv.Itoa(config.Openfaas.GatewayPort)+"/function/"+config.Openfaas.FunctionName+"."+config.Openfaas.FunctionNamespace,
+		config.Openfaas.MutualTLS,
+		config.Openfaas.CheckCert,
+		*initClientArgs,
+	)
 }
 
 // OpenfaasCall .
-func (c *Client) OpenfaasCall(falcopayload types.FalcoPayload) {
+func (c *Client) OpenfaasCall(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Openfaas.Add(Total, 1)
 
 	if c.Config.Openfaas.Kubeconfig != "" {
-		str, _ := json.Marshal(falcopayload)
+		str, _ := json.Marshal(kubearmorpayload)
 		req := c.KubernetesClient.CoreV1().RESTClient().Post().AbsPath("/api/v1/namespaces/" + c.Config.Openfaas.GatewayNamespace + "/services/" + c.Config.Openfaas.GatewayService + ":" + strconv.Itoa(c.Config.Openfaas.GatewayPort) + "/proxy" + "/function/" + c.Config.Openfaas.FunctionName + "." + c.Config.Openfaas.FunctionNamespace).Body(str)
 		req.SetHeader("event-id", uuid.New().String())
 		req.SetHeader("Content-Type", "application/json")
-		req.SetHeader("User-Agent", "Falcosidekick")
+		req.SetHeader("User-Agent", "Kubearmor")
 
 		res := req.Do(context.TODO())
 		rawbody, err := res.Raw()
@@ -73,7 +74,7 @@ func (c *Client) OpenfaasCall(falcopayload types.FalcoPayload) {
 		}
 		log.Printf("[INFO]  : %v - Function Response : %v\n", Openfaas, string(rawbody))
 	} else {
-		err := c.Post(falcopayload)
+		err := c.Post(kubearmorpayload)
 		if err != nil {
 			go c.CountMetric(Outputs, 1, []string{"output:openfaas", "status:error"})
 			c.Stats.Openfaas.Add(Error, 1)

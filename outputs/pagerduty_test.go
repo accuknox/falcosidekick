@@ -33,7 +33,7 @@ func TestPagerdutyPayload(t *testing.T) {
 		},
 	}
 
-	var f types.FalcoPayload
+	var f types.KubearmorPayload
 	json.Unmarshal([]byte(falcoTestInput), &f)
 
 	event := createPagerdutyEvent(f, types.PagerdutyConfig{})

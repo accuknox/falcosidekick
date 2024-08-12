@@ -22,6 +22,9 @@ const (
 	Accepted string = "accepted"
 	Outputs  string = "outputs"
 
+	Kubearmor string = "Kubearmor"
+	Accuknox  string = "Accuknox"
+
 	Rule      string = "rule"
 	Priority  string = "priority"
 	Source    string = "source"

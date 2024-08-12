@@ -5,7 +5,6 @@ package outputs
 import (
 	"context"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
@@ -20,10 +19,10 @@ const (
 )
 
 // PagerdutyPost posts alert event to Pagerduty
-func (c *Client) PagerdutyPost(falcopayload types.FalcoPayload) {
+func (c *Client) PagerdutyPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Pagerduty.Add(Total, 1)
 
-	event := createPagerdutyEvent(falcopayload, c.Config.Pagerduty)
+	event := createPagerdutyEvent(kubearmorpayload, c.Config.Pagerduty)
 
 	if strings.ToLower(c.Config.Pagerduty.Region) == "eu" {
 		pagerduty.WithV2EventsAPIEndpoint(EUEndpoint)
@@ -45,27 +44,23 @@ func (c *Client) PagerdutyPost(falcopayload types.FalcoPayload) {
 	log.Printf("[INFO]  : Pagerduty - Create Incident OK\n")
 }
 
-func createPagerdutyEvent(falcopayload types.FalcoPayload, config types.PagerdutyConfig) pagerduty.V2Event {
-	details := make(map[string]interface{}, len(falcopayload.OutputFields)+4)
-	details["rule"] = falcopayload.Rule
-	details["priority"] = falcopayload.Priority.String()
-	details["source"] = falcopayload.Source
-	if len(falcopayload.Hostname) != 0 {
-		falcopayload.OutputFields[Hostname] = falcopayload.Hostname
+func createPagerdutyEvent(kubearmorpayload types.KubearmorPayload, config types.PagerdutyConfig) pagerduty.V2Event {
+	details := make(map[string]interface{}, len(kubearmorpayload.OutputFields)+4)
+	details["priority"] = kubearmorpayload.EventType
+	details["source"] = kubearmorpayload.OutputFields["PodName"].(string)
+	if len(kubearmorpayload.Hostname) != 0 {
+		kubearmorpayload.OutputFields[Hostname] = kubearmorpayload.Hostname
 	}
-	if len(falcopayload.Tags) != 0 {
-		sort.Strings(falcopayload.Tags)
-		details["tags"] = strings.Join(falcopayload.Tags, ", ")
-	}
+	timestamp := time.Unix(kubearmorpayload.Timestamp, 0)
 	event := pagerduty.V2Event{
 		RoutingKey: config.RoutingKey,
 		Action:     "trigger",
 		Payload: &pagerduty.V2Payload{
-			Source:    "falco",
-			Summary:   falcopayload.Output,
+			Source:    "Kubearmor",
+			Summary:   kubearmorpayload.EventType + " for " + kubearmorpayload.OutputFields["PodName"].(string),
 			Severity:  "critical",
-			Timestamp: falcopayload.Time.Format(time.RFC3339),
-			Details:   falcopayload.OutputFields,
+			Timestamp: timestamp.Format(time.RFC3339),
+			Details:   kubearmorpayload.OutputFields,
 		},
 	}
 	return event

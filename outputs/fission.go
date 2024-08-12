@@ -5,7 +5,6 @@ package outputs
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strconv"
 
@@ -46,27 +45,31 @@ func NewFissionClient(config *types.Configuration, stats *types.Statistics, prom
 			KubernetesClient: clientset,
 		}, nil
 	}
-
-	endpointUrl := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/fission-function/%s", config.Fission.RouterService, config.Fission.RouterNamespace, config.Fission.RouterPort, config.Fission.Function)
 	initClientArgs := &types.InitClientArgs{
 		Config:          config,
 		Stats:           stats,
 		DogstatsdClient: dogstatsdClient,
 		PromStats:       promStats,
-		StatsdClient:    statsdClient,
 	}
-
-	return NewClient(Fission, endpointUrl, config.Fission.MutualTLS, config.Fission.CheckCert, *initClientArgs)
+	return NewClient(
+		Fission,
+		"http://"+config.Fission.RouterService+"."+config.Fission.RouterNamespace+
+			".svc.cluster.local:"+strconv.Itoa(config.Fission.RouterPort)+
+			"/fission-function/"+config.Fission.Function,
+		config.Fission.MutualTLS,
+		config.Fission.CheckCert,
+		*initClientArgs,
+	)
 }
 
 // FissionCall .
-func (c *Client) FissionCall(falcopayload types.FalcoPayload) {
+func (c *Client) FissionCall(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Fission.Add(Total, 1)
 
 	if c.Config.Fission.KubeConfig != "" {
-		str, _ := json.Marshal(falcopayload)
-		req := c.KubernetesClient.CoreV1().RESTClient().Post().AbsPath(APIv1Namespaces +
-			c.Config.Fission.RouterNamespace + ServicesPath + c.Config.Fission.RouterService +
+		str, _ := json.Marshal(kubearmorpayload)
+		req := c.KubernetesClient.CoreV1().RESTClient().Post().AbsPath("/api/v1/namespaces/" +
+			c.Config.Fission.RouterNamespace + "/services/" + c.Config.Fission.RouterService +
 			":" + strconv.Itoa(c.Config.Fission.RouterPort) + "/proxy/" + "/fission-function/" +
 			c.Config.Fission.Function).Body(str)
 		req.SetHeader(FissionEventIDKey, uuid.New().String())
@@ -89,7 +92,7 @@ func (c *Client) FissionCall(falcopayload types.FalcoPayload) {
 		c.AddHeader(FissionEventIDKey, uuid.New().String())
 		c.ContentType = FissionContentType
 
-		err := c.Post(falcopayload)
+		err := c.Post(kubearmorpayload)
 		if err != nil {
 			go c.CountMetric(Outputs, 1, []string{"output:Fission", "status:error"})
 			c.Stats.Fission.Add(Error, 1)

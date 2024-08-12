@@ -3,11 +3,12 @@
 package outputs
 
 import (
+	"fmt"
 	"log"
-	"sort"
-	"strings"
+	"time"
 
 	"github.com/falcosecurity/falcosidekick/types"
+	"github.com/google/uuid"
 )
 
 type teamsFact struct {
@@ -31,7 +32,7 @@ type teamsPayload struct {
 	Sections   []teamsSection `json:"sections"`
 }
 
-func newTeamsPayload(falcopayload types.FalcoPayload, config *types.Configuration) teamsPayload {
+func newTeamsPayload(kubearmorpayload types.KubearmorPayload, config *types.Configuration) teamsPayload {
 	var (
 		sections []teamsSection
 		section  teamsSection
@@ -39,43 +40,38 @@ func newTeamsPayload(falcopayload types.FalcoPayload, config *types.Configuratio
 		fact     teamsFact
 	)
 
-	section.ActivityTitle = "Falco Sidekick"
-	section.ActivitySubTitle = falcopayload.Time.String()
-
-	if config.Teams.OutputFormat == All || config.Teams.OutputFormat == Text || config.Teams.OutputFormat == "" {
-		section.Text = falcopayload.Output
-	}
+	section.ActivityTitle = "Kubearmor Sidekick"
+	section.ActivitySubTitle = fmt.Sprint(kubearmorpayload.Timestamp)
 
 	if config.Teams.ActivityImage != "" {
 		section.ActivityImage = config.Teams.ActivityImage
 	}
 
 	if config.Teams.OutputFormat == All || config.Teams.OutputFormat == "facts" || config.Teams.OutputFormat == "" {
-		fact.Name = Rule
-		fact.Value = falcopayload.Rule
-		facts = append(facts, fact)
+		for i, j := range kubearmorpayload.OutputFields {
+			switch v := j.(type) {
+			case string:
+				fact.Name = i
+				fact.Value = v
+			default:
+				vv := fmt.Sprint(v)
+				fact.Name = i
+				fact.Value = vv
+
+			}
+
+			facts = append(facts, fact)
+		}
+
 		fact.Name = Priority
-		fact.Value = falcopayload.Priority.String()
+		fact.Value = kubearmorpayload.EventType
 		facts = append(facts, fact)
 		fact.Name = Source
-		fact.Value = falcopayload.Source
+		fact.Value = kubearmorpayload.OutputFields["PodName"].(string)
 		facts = append(facts, fact)
-		if falcopayload.Hostname != "" {
+		if kubearmorpayload.Hostname != "" {
 			fact.Name = Hostname
-			fact.Value = falcopayload.Hostname
-			facts = append(facts, fact)
-		}
-
-		for _, i := range getSortedStringKeys(falcopayload.OutputFields) {
-			fact.Name = i
-			fact.Value = falcopayload.OutputFields[i].(string)
-			facts = append(facts, fact)
-		}
-
-		if len(falcopayload.Tags) != 0 {
-			sort.Strings(falcopayload.Tags)
-			fact.Name = Tags
-			fact.Value = strings.Join(falcopayload.Tags, ", ")
+			fact.Value = kubearmorpayload.Hostname
 			facts = append(facts, fact)
 		}
 	}
@@ -83,30 +79,17 @@ func newTeamsPayload(falcopayload types.FalcoPayload, config *types.Configuratio
 	section.Facts = facts
 
 	var color string
-	switch falcopayload.Priority {
-	case types.Emergency:
-		color = "e20b0b"
-	case types.Alert:
+	switch kubearmorpayload.EventType {
+	case "Alert":
 		color = "ff5400"
-	case types.Critical:
-		color = "ff9000"
-	case types.Error:
-		color = "ffc700"
-	case types.Warning:
-		color = "ffff00"
-	case types.Notice:
-		color = "5bffb5"
-	case types.Informational:
+	case "Log":
 		color = "68c2ff"
-	case types.Debug:
-		color = "ccfff2"
 	}
 
 	sections = append(sections, section)
 
 	t := teamsPayload{
 		Type:       "MessageCard",
-		Summary:    falcopayload.Output,
 		ThemeColor: color,
 		Sections:   sections,
 	}
@@ -115,10 +98,10 @@ func newTeamsPayload(falcopayload types.FalcoPayload, config *types.Configuratio
 }
 
 // TeamsPost posts event to Teams
-func (c *Client) TeamsPost(falcopayload types.FalcoPayload) {
+func (c *Client) TeamsPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Teams.Add(Total, 1)
 
-	err := c.Post(newTeamsPayload(falcopayload, c.Config))
+	err := c.Post(newTeamsPayload(kubearmorpayload, c.Config))
 	if err != nil {
 		go c.CountMetric(Outputs, 1, []string{"output:teams", "status:error"})
 		c.Stats.Teams.Add(Error, 1)
@@ -131,4 +114,27 @@ func (c *Client) TeamsPost(falcopayload types.FalcoPayload) {
 	go c.CountMetric(Outputs, 1, []string{"output:teams", "status:ok"})
 	c.Stats.Teams.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "teams", "status": OK}).Inc()
+}
+
+func (c *Client) WatchTeamsPostAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.TeamsPost(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
+	return nil
 }
