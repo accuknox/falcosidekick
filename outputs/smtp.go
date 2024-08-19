@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	textTemplate "text/template"
+	"time"
 
 	"github.com/DataDog/datadog-go/statsd"
 	sasl "github.com/emersion/go-sasl"
@@ -48,16 +49,18 @@ func NewSMTPClient(config *types.Configuration, stats *types.Statistics, promSta
 	}, nil
 }
 
-func newSMTPPayload(falcopayload types.FalcoPayload, config *types.Configuration) SMTPPayload {
+func newSMTPPayload(KubearmorPayload types.KubearmorPayload, config *types.Configuration) SMTPPayload {
 	s := SMTPPayload{
 		From:    "From: " + config.SMTP.From,
 		To:      "To: " + config.SMTP.To,
-		Subject: "Subject: [" + falcopayload.Priority.String() + "] " + falcopayload.Output,
+		Subject: "Subject: " + "Alert : " + "triggerName",
 	}
+
+	time := time.Unix(KubearmorPayload.Timestamp, 0)
 
 	s.Body = "From: " + config.SMTP.From + "\n"
 	s.Body += "To: " + config.SMTP.To + "\n"
-	s.Body += "Date: " + falcopayload.Time.Format(rfc2822) + "\n"
+	s.Body += "Date: " + time.Format(rfc2822) + "\n"
 	s.Body += "MIME-version: 1.0\n"
 
 	if config.SMTP.OutputFormat != Text {
@@ -69,7 +72,7 @@ func newSMTPPayload(falcopayload types.FalcoPayload, config *types.Configuration
 	ttmpl := textTemplate.New(Text)
 	ttmpl, _ = ttmpl.Parse(plaintextTmpl)
 	var outtext bytes.Buffer
-	err := ttmpl.Execute(&outtext, falcopayload)
+	err := ttmpl.Execute(&outtext, KubearmorPayload)
 	if err != nil {
 		log.Printf("[ERROR] : SMTP - %v\n", err)
 		return s
@@ -83,9 +86,9 @@ func newSMTPPayload(falcopayload types.FalcoPayload, config *types.Configuration
 	s.Body += "--4t74weu9byeSdJTM\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
 
 	htmpl := htmlTemplate.New("html")
-	htmpl, _ = htmpl.Parse(htmlTmpl)
+	htmpl, _ = htmpl.Parse(HtmlTmpl)
 	var outhtml bytes.Buffer
-	err = htmpl.Execute(&outhtml, falcopayload)
+	err = htmpl.Execute(&outhtml, KubearmorPayload)
 	if err != nil {
 		log.Printf("[ERROR] : SMTP - %v\n", err)
 		return s
@@ -127,8 +130,8 @@ func (c *Client) GetAuth() (sasl.Client, error) {
 }
 
 // SendMail sends email to SMTP server
-func (c *Client) SendMail(falcopayload types.FalcoPayload) {
-	sp := newSMTPPayload(falcopayload, c.Config)
+func (c *Client) SendMail(KubearmorPayload types.KubearmorPayload) {
+	sp := newSMTPPayload(KubearmorPayload, c.Config)
 
 	to := strings.Split(strings.ReplaceAll(c.Config.SMTP.To, " ", ""), ",")
 
@@ -178,4 +181,27 @@ func (c *Client) SendMail(falcopayload types.FalcoPayload) {
 	log.Printf("[INFO]  : SMTP - Sent OK\n")
 	go c.CountMetric("outputs", 1, []string{"output:smtp", "status:ok"})
 	c.Stats.SMTP.Add(OK, 1)
+}
+
+func (c *Client) WatchSmtpAlerts() error {
+	uid := "email"
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.SendMail(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
+	return nil
 }

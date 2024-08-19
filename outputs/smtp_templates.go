@@ -16,7 +16,7 @@ Time: {{ .Time }}
 
 `
 
-var htmlTmpl = `
+var HtmlTmpl = `
 {{ $color := "#858585" }}
 {{ $prio := printf "%v" .Priority }}
 {{ if or (eq $prio "Emergency") (eq $prio "emergency") }}{{ $color = "#e20b0b" }}{{ end }}

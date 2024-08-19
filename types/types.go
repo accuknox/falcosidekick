@@ -57,6 +57,7 @@ type Configuration struct {
 	Templatedfields    map[string]string
 	Prometheus         prometheusOutputConfig
 	Slack              SlackOutputConfig
+	Email              EmailOutputConfig
 	Cliq               CliqOutputConfig
 	Mattermost         MattermostOutputConfig
 	Rocketchat         RocketchatOutputConfig
@@ -156,6 +157,18 @@ type SlackOutputConfig struct {
 	MessageFormatTemplate *template.Template
 	CheckCert             bool
 	MutualTLS             bool
+}
+
+// EmailOutputConfig represents parameters for Slack
+type EmailOutputConfig struct {
+	Host        string
+	Username    string
+	Password    string
+	Port        int
+	Sender      string
+	SenderEmail string
+	AlertUrl    string
+	HeaderLogo  string
 }
 
 // CliqOutputConfig represents parameters for Zoho Cliq
