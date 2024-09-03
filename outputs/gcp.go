@@ -108,10 +108,10 @@ func NewGCPClient(config *types.Configuration, stats *types.Statistics, promStat
 }
 
 // GCPCallCloudFunction calls the given Cloud Function
-func (c *Client) GCPCallCloudFunction(falcopayload types.FalcoPayload) {
+func (c *Client) GCPCallCloudFunction(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.GCPCloudFunctions.Add(Total, 1)
 
-	payload, _ := json.Marshal(falcopayload)
+	payload, _ := json.Marshal(kubearmorpayload)
 	data := string(payload)
 
 	result, err := c.GCPCloudFunctionsClient.CallFunction(context.Background(), &gcpfunctionspb.CallFunctionRequest{
@@ -135,10 +135,10 @@ func (c *Client) GCPCallCloudFunction(falcopayload types.FalcoPayload) {
 }
 
 // GCPPublishTopic sends a message to a GCP PubSub Topic
-func (c *Client) GCPPublishTopic(falcopayload types.FalcoPayload) {
+func (c *Client) GCPPublishTopic(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.GCPPubSub.Add(Total, 1)
 
-	payload, _ := json.Marshal(falcopayload)
+	payload, _ := json.Marshal(kubearmorpayload)
 	message := &pubsub.Message{
 		Data:       payload,
 		Attributes: c.Config.GCP.PubSub.CustomAttributes,
@@ -162,10 +162,10 @@ func (c *Client) GCPPublishTopic(falcopayload types.FalcoPayload) {
 }
 
 // UploadGCS upload payload to
-func (c *Client) UploadGCS(falcopayload types.FalcoPayload) {
+func (c *Client) UploadGCS(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.GCPStorage.Add(Total, 1)
 
-	payload, _ := json.Marshal(falcopayload)
+	payload, _ := json.Marshal(kubearmorpayload)
 
 	prefix := ""
 	t := time.Now()
@@ -175,23 +175,10 @@ func (c *Client) UploadGCS(falcopayload types.FalcoPayload) {
 
 	key := fmt.Sprintf("%s/%s/%s.json", prefix, t.Format("2006-01-02"), t.Format(time.RFC3339Nano))
 	bucketWriter := c.GCSStorageClient.Bucket(c.Config.GCP.Storage.Bucket).Object(key).NewWriter(context.Background())
-	n, err := bucketWriter.Write(payload)
+	defer bucketWriter.Close()
+	_, err := bucketWriter.Write(payload)
 	if err != nil {
 		log.Printf("[ERROR] : GCPStorage - %v - %v\n", "Error while Uploading message", err.Error())
-		c.Stats.GCPStorage.Add(Error, 1)
-		go c.CountMetric("outputs", 1, []string{"output:gcpstorage", "status:error"})
-		c.PromStats.Outputs.With(map[string]string{"destination": "gcpstorage", "status": Error}).Inc()
-		return
-	}
-	if n == 0 {
-		log.Printf("[ERROR] : GCPStorage - %v\n", "Empty payload uploaded")
-		c.Stats.GCPStorage.Add(Error, 1)
-		go c.CountMetric("outputs", 1, []string{"output:gcpstorage", "status:error"})
-		c.PromStats.Outputs.With(map[string]string{"destination": "gcpstorage", "status": Error}).Inc()
-		return
-	}
-	if err := bucketWriter.Close(); err != nil {
-		log.Printf("[ERROR] : GCPStorage - %v - %v\n", "Error while closing the writer", err.Error())
 		c.Stats.GCPStorage.Add(Error, 1)
 		go c.CountMetric("outputs", 1, []string{"output:gcpstorage", "status:error"})
 		c.PromStats.Outputs.With(map[string]string{"destination": "gcpstorage", "status": Error}).Inc()

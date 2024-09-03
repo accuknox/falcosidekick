@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azeventhubs "github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs"
 	"github.com/DataDog/datadog-go/statsd"
+	"github.com/google/uuid"
 
 	"github.com/falcosecurity/falcosidekick/types"
 )
@@ -28,7 +29,7 @@ func NewEventHubClient(config *types.Configuration, stats *types.Statistics, pro
 }
 
 // EventHubPost posts event to Azure Event Hub
-func (c *Client) EventHubPost(falcopayload types.FalcoPayload) {
+func (c *Client) EventHubPost(KubearmorPayload types.KubearmorPayload) {
 	c.Stats.AzureEventHub.Add(Total, 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -52,7 +53,7 @@ func (c *Client) EventHubPost(falcopayload types.FalcoPayload) {
 
 	log.Printf("[INFO]  : %v EventHub - Hub client created\n", c.OutputType)
 
-	data, err := json.Marshal(falcopayload)
+	data, err := json.Marshal(KubearmorPayload)
 	if err != nil {
 		c.setEventHubErrorMetrics()
 		log.Printf("[ERROR] : Cannot marshal payload: %v", err.Error())
@@ -91,4 +92,28 @@ func (c *Client) setEventHubErrorMetrics() {
 	go c.CountMetric(Outputs, 1, []string{"output:azureeventhub", "status:error"})
 	c.Stats.AzureEventHub.Add(Error, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "azureeventhub", "status": Error}).Inc()
+}
+
+// EnqueueSecurityLake
+func (c *Client) WatchEventHubPostlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.EventHubPost(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
+	return nil
 }

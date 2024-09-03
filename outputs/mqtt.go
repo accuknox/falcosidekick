@@ -4,6 +4,7 @@ package outputs
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
 
 	"github.com/DataDog/datadog-go/statsd"
@@ -19,14 +20,15 @@ func NewMQTTClient(config *types.Configuration, stats *types.Statistics, promSta
 
 	options := mqtt.NewClientOptions()
 	options.AddBroker(config.MQTT.Broker)
-	options.SetClientID("falcosidekick-" + uuid.NewString()[:6])
+	options.SetClientID("kubearmor-" + uuid.NewString()[:6])
 	if config.MQTT.User != "" && config.MQTT.Password != "" {
 		options.Username = config.MQTT.User
 		options.Password = config.MQTT.Password
 	}
 	if !config.MQTT.CheckCert {
+		// #nosec G402 This is only set as a result of explicit configuration
 		options.TLSConfig = &tls.Config{
-			InsecureSkipVerify: true, // #nosec G402 This is only set as a result of explicit configuration
+			InsecureSkipVerify: true,
 		}
 	}
 	options.OnConnectionLost = func(client mqtt.Client, err error) {
@@ -47,7 +49,7 @@ func NewMQTTClient(config *types.Configuration, stats *types.Statistics, promSta
 }
 
 // MQTTPublish .
-func (c *Client) MQTTPublish(falcopayload types.FalcoPayload) {
+func (c *Client) MQTTPublish(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.MQTT.Add(Total, 1)
 
 	t := c.MQTTClient.Connect()
@@ -60,7 +62,7 @@ func (c *Client) MQTTPublish(falcopayload types.FalcoPayload) {
 		return
 	}
 	defer c.MQTTClient.Disconnect(100)
-	if err := c.MQTTClient.Publish(c.Config.MQTT.Topic, byte(c.Config.MQTT.QOS), c.Config.MQTT.Retained, falcopayload.String()).Error(); err != nil {
+	if err := c.MQTTClient.Publish(c.Config.MQTT.Topic, byte(c.Config.MQTT.QOS), c.Config.MQTT.Retained, kubearmorpayload.String()).Error(); err != nil {
 		go c.CountMetric(Outputs, 1, []string{"output:mqtt", "status:error"})
 		c.Stats.MQTT.Add(Error, 1)
 		c.PromStats.Outputs.With(map[string]string{"destination": "mqtt", "status": Error}).Inc()
@@ -72,4 +74,24 @@ func (c *Client) MQTTPublish(falcopayload types.FalcoPayload) {
 	go c.CountMetric(Outputs, 1, []string{"output:mqtt", "status:ok"})
 	c.Stats.MQTT.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "mqtt", "status": OK}).Inc()
+}
+
+func (c *Client) WatchMQTTPublishAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	fmt.Println("discord running")
+	for AlertRunning {
+		select {
+		case resp := <-conn:
+			fmt.Println("response \n", resp)
+			c.MQTTPublish(resp)
+		}
+	}
+	fmt.Println("discord stopped")
+	return nil
 }

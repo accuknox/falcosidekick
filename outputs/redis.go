@@ -5,11 +5,13 @@ package outputs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 
 	"github.com/DataDog/datadog-go/statsd"
 	"github.com/falcosecurity/falcosidekick/types"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -18,6 +20,7 @@ func (c *Client) ReportError(err error) {
 	c.Stats.Redis.Add(Error, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "redis", "status": Error}).Inc()
 	log.Printf("[ERROR] : Redis - %v\n", err)
+	return
 }
 
 func NewRedisClient(config *types.Configuration, stats *types.Statistics, promStats *types.PromStatistics,
@@ -46,11 +49,11 @@ func NewRedisClient(config *types.Configuration, stats *types.Statistics, promSt
 	}, nil
 }
 
-func (c *Client) RedisPost(falcopayload types.FalcoPayload) {
+func (c *Client) RedisPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Redis.Add(Total, 1)
-	redisPayload, _ := json.Marshal(falcopayload)
+	redisPayload, _ := json.Marshal(kubearmorpayload)
 	if strings.ToLower(c.Config.Redis.StorageType) == "hashmap" {
-		_, err := c.RedisClient.HSet(context.Background(), c.Config.Redis.Key, falcopayload.UUID, redisPayload).Result()
+		_, err := c.RedisClient.HSet(context.Background(), c.Config.Redis.Key, kubearmorpayload.OutputFields["UID"], redisPayload).Result()
 		if err != nil {
 			c.ReportError(err)
 		}
@@ -65,4 +68,24 @@ func (c *Client) RedisPost(falcopayload types.FalcoPayload) {
 	go c.CountMetric(Outputs, 1, []string{"output:redis", "status:ok"})
 	c.Stats.Redis.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "redis", "status": OK}).Inc()
+}
+
+func (c *Client) WatchRedisPostAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	fmt.Println("discord running")
+	for AlertRunning {
+		select {
+		case resp := <-conn:
+			fmt.Println("response \n", resp)
+			c.RedisPost(resp)
+		}
+	}
+	fmt.Println("discord stopped")
+	return nil
 }

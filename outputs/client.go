@@ -128,6 +128,13 @@ type Client struct {
 	MQTTClient        mqtt.Client
 	TimescaleDBClient *timescaledb.Pool
 	RedisClient       *redis.Client
+
+	// wait group
+	WgServer sync.WaitGroup
+
+	GetLogs bool
+	//
+	Running bool
 }
 
 // InitClient returns a new output.Client for accessing the different API.

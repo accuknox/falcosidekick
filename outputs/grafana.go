@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/falcosecurity/falcosidekick/types"
+	"github.com/google/uuid"
 )
 
 type grafanaPayload struct {
@@ -28,30 +29,26 @@ type grafanaOnCallPayload struct {
 // The Content-Type to send along with the request
 const GrafanaContentType = "application/json"
 
-func newGrafanaPayload(falcopayload types.FalcoPayload, config *types.Configuration) grafanaPayload {
+func newGrafanaPayload(kubearmorpayload types.KubearmorPayload, config *types.Configuration) grafanaPayload {
 	tags := []string{
-		"falco",
-		falcopayload.Priority.String(),
-		falcopayload.Rule,
-		falcopayload.Source,
+		"kubearmor",
+		kubearmorpayload.EventType,
 	}
-	if falcopayload.Hostname != "" {
-		tags = append(tags, falcopayload.Hostname)
+	if kubearmorpayload.Hostname != "" {
+		tags = append(tags, kubearmorpayload.Hostname)
 	}
 
 	if config.Grafana.AllFieldsAsTags {
-		for _, i := range falcopayload.OutputFields {
-			tags = append(tags, fmt.Sprintf("%v", i))
-		}
-		if len(falcopayload.Tags) != 0 {
-			tags = append(tags, falcopayload.Tags...)
+		for key, i := range kubearmorpayload.OutputFields {
+			s := key + ": " + fmt.Sprint(i)
+			tags = append(tags, s)
 		}
 	}
 
 	g := grafanaPayload{
-		Text:    falcopayload.Output,
-		Time:    falcopayload.Time.UnixNano() / 1000000,
-		TimeEnd: falcopayload.Time.UnixNano() / 1000000,
+		Text:    kubearmorpayload.EventType + "for pod" + kubearmorpayload.OutputFields["PodName"].(string),
+		Time:    kubearmorpayload.Timestamp / 1000000,
+		TimeEnd: kubearmorpayload.Timestamp / 1000000,
 		Tags:    tags,
 	}
 
@@ -65,27 +62,27 @@ func newGrafanaPayload(falcopayload types.FalcoPayload, config *types.Configurat
 	return g
 }
 
-func newGrafanaOnCallPayload(falcopayload types.FalcoPayload) grafanaOnCallPayload {
+func newGrafanaOnCallPayload(kubearmorpayload types.KubearmorPayload, config *types.Configuration) grafanaOnCallPayload {
 	return grafanaOnCallPayload{
-		AlertUID: falcopayload.UUID,
-		Title:    fmt.Sprintf("[%v] %v", falcopayload.Priority, falcopayload.Rule),
+		AlertUID: kubearmorpayload.OutputFields["UID"].(string),
+		Title:    fmt.Sprintf("[%v] %v", kubearmorpayload.EventType, kubearmorpayload.OutputFields["PodName"].(string)),
 		State:    "alerting",
-		Message:  falcopayload.Output,
+		//Message:  kubearmorpayload.Output,
 	}
 }
 
 // GrafanaPost posts event to grafana
-func (c *Client) GrafanaPost(falcopayload types.FalcoPayload) {
+func (c *Client) GrafanaPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Grafana.Add(Total, 1)
 	c.ContentType = GrafanaContentType
 	c.httpClientLock.Lock()
 	defer c.httpClientLock.Unlock()
-	c.AddHeader("Authorization", Bearer+" "+c.Config.Grafana.APIKey)
+	c.AddHeader("Authorization", "Bearer "+c.Config.Grafana.APIKey)
 	for i, j := range c.Config.Grafana.CustomHeaders {
 		c.AddHeader(i, j)
 	}
 
-	err := c.Post(newGrafanaPayload(falcopayload, c.Config))
+	err := c.Post(newGrafanaPayload(kubearmorpayload, c.Config))
 	if err != nil {
 		go c.CountMetric(Outputs, 1, []string{"output:grafana", "status:error"})
 		c.Stats.Grafana.Add(Error, 1)
@@ -100,7 +97,7 @@ func (c *Client) GrafanaPost(falcopayload types.FalcoPayload) {
 }
 
 // GrafanaOnCallPost posts event to grafana onCall
-func (c *Client) GrafanaOnCallPost(falcopayload types.FalcoPayload) {
+func (c *Client) GrafanaOnCallPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.GrafanaOnCall.Add(Total, 1)
 	c.ContentType = GrafanaContentType
 	c.httpClientLock.Lock()
@@ -109,7 +106,7 @@ func (c *Client) GrafanaOnCallPost(falcopayload types.FalcoPayload) {
 		c.AddHeader(i, j)
 	}
 
-	err := c.Post(newGrafanaOnCallPayload(falcopayload))
+	err := c.Post(newGrafanaOnCallPayload(kubearmorpayload, c.Config))
 	if err != nil {
 		go c.CountMetric(Outputs, 1, []string{"output:grafanaoncall", "status:error"})
 		c.Stats.Grafana.Add(Error, 1)
@@ -121,4 +118,45 @@ func (c *Client) GrafanaOnCallPost(falcopayload types.FalcoPayload) {
 	go c.CountMetric(Outputs, 1, []string{"output:grafanaoncall", "status:ok"})
 	c.Stats.Grafana.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "grafanaoncall", "status": OK}).Inc()
+}
+
+func (c *Client) WatchGrafanaPostAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	Running := true
+	fmt.Println("discord running")
+	for Running {
+		select {
+		case resp := <-conn:
+			fmt.Println("response \n", resp)
+			c.GrafanaPost(resp)
+		}
+	}
+	fmt.Println("discord stopped")
+	return nil
+}
+
+func (c *Client) WatchGrafanaOnCallPostAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	fmt.Println("discord running")
+	for AlertRunning {
+		select {
+		case resp := <-conn:
+			fmt.Println("response \n", resp)
+			c.GrafanaOnCallPost(resp)
+		}
+	}
+	fmt.Println("discord stopped")
+	return nil
 }

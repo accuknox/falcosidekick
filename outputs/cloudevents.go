@@ -5,14 +5,16 @@ package outputs
 import (
 	"context"
 	"log"
+	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/google/uuid"
 
 	"github.com/falcosecurity/falcosidekick/types"
 )
 
 // CloudEventsSend produces a CloudEvent and sends to the CloudEvents consumers.
-func (c *Client) CloudEventsSend(falcopayload types.FalcoPayload) {
+func (c *Client) CloudEventsSend(KubearmorPayload types.KubearmorPayload) {
 	c.Stats.CloudEvents.Add(Total, 1)
 
 	if c.CloudEventsClient == nil {
@@ -28,15 +30,12 @@ func (c *Client) CloudEventsSend(falcopayload types.FalcoPayload) {
 	ctx := cloudevents.ContextWithTarget(context.Background(), c.EndpointURL.String())
 
 	event := cloudevents.NewEvent()
-	event.SetTime(falcopayload.Time)
-	event.SetSource("https://falco.org")
-	event.SetType("falco.rule.output.v1")
-	event.SetExtension("priority", falcopayload.Priority.String())
-	event.SetExtension("rule", falcopayload.Rule)
-	event.SetExtension("event_source", falcopayload.Source)
-
-	if falcopayload.Hostname != "" {
-		event.SetExtension(Hostname, falcopayload.Hostname)
+	event.SetTime(time.Unix(KubearmorPayload.Timestamp, 0))
+	event.SetSource("https://kubearmor.io/") // TODO: this should have some info on the server that made the event.
+	event.SetType("kubearmor.rule.output.v1")
+	event.SetExtension("priority", KubearmorPayload.EventType)
+	if KubearmorPayload.Hostname != "" {
+		event.SetExtension(Hostname, KubearmorPayload.Hostname)
 	}
 
 	// Set Extensions.
@@ -44,7 +43,7 @@ func (c *Client) CloudEventsSend(falcopayload types.FalcoPayload) {
 		event.SetExtension(k, v)
 	}
 
-	if err := event.SetData(cloudevents.ApplicationJSON, falcopayload); err != nil {
+	if err := event.SetData(cloudevents.ApplicationJSON, KubearmorPayload); err != nil {
 		log.Printf("[ERROR] : CloudEvents, failed to set data : %v\n", err)
 	}
 
@@ -61,4 +60,27 @@ func (c *Client) CloudEventsSend(falcopayload types.FalcoPayload) {
 	c.Stats.CloudEvents.Add(OK, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "cloudevents", "status": OK}).Inc()
 	log.Printf("[INFO]  : CloudEvents - Send OK\n")
+}
+
+func (c *Client) WatchCloudEventsSendAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	for AlertRunning {
+		select {
+		// case <-Context().Done():
+		// 	return nil
+		case resp := <-conn:
+			c.CloudEventsSend(resp)
+		default:
+			time.Sleep(time.Millisecond * 10)
+
+		}
+	}
+
+	return nil
 }

@@ -3,19 +3,17 @@
 package outputs
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/falcosecurity/falcosidekick/types"
+	"github.com/google/uuid"
 )
 
 type eSPayload struct {
-	types.FalcoPayload
+	types.KubearmorPayload
 	Timestamp time.Time `json:"@timestamp"`
 }
 
@@ -32,13 +30,13 @@ type mappingError struct {
 }
 
 // ElasticsearchPost posts event to Elasticsearch
-func (c *Client) ElasticsearchPost(falcopayload types.FalcoPayload) {
+func (c *Client) ElasticsearchPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Elasticsearch.Add(Total, 1)
 
 	current := time.Now()
 	var eURL string
 	switch c.Config.Elasticsearch.Suffix {
-	case None:
+	case "none":
 		eURL = c.Config.Elasticsearch.HostPort + "/" + c.Config.Elasticsearch.Index + "/" + c.Config.Elasticsearch.Type
 	case "monthly":
 		eURL = c.Config.Elasticsearch.HostPort + "/" + c.Config.Elasticsearch.Index + "-" + current.Format("2006.01") + "/" + c.Config.Elasticsearch.Type
@@ -66,47 +64,11 @@ func (c *Client) ElasticsearchPost(falcopayload types.FalcoPayload) {
 		c.AddHeader(i, j)
 	}
 
-	payload := eSPayload{FalcoPayload: falcopayload, Timestamp: falcopayload.Time}
-	if c.Config.Elasticsearch.FlattenFields || c.Config.Elasticsearch.CreateIndexTemplate {
-		for i, j := range payload.OutputFields {
-			payload.OutputFields[strings.ReplaceAll(i, ".", "_")] = j
-			delete(payload.OutputFields, i)
-		}
-	}
-
-	err = c.Post(payload)
+	err = c.Post(kubearmorpayload)
 	if err != nil {
-		var mappingErr mappingError
-		if err2 := json.Unmarshal([]byte(err.Error()), &mappingErr); err2 != nil {
-			c.setElasticSearchErrorMetrics()
-			return
-		}
-		if mappingErr.Error.Type == "document_parsing_exception" {
-			reg := regexp.MustCompile(`\[\w+(\.\w+)+\]`)
-			k := reg.FindStringSubmatch(mappingErr.Error.Reason)
-			if len(k) == 0 {
-				c.setElasticSearchErrorMetrics()
-				return
-			}
-			if !strings.Contains(k[0], "output_fields") {
-				c.setElasticSearchErrorMetrics()
-				return
-			}
-			s := strings.ReplaceAll(k[0], "[output_fields.", "")
-			s = strings.ReplaceAll(s, "]", "")
-			for i := range payload.OutputFields {
-				if strings.HasPrefix(i, s) {
-					delete(payload.OutputFields, i)
-				}
-			}
-			fmt.Println(payload.OutputFields)
-			log.Printf("[INFO]  : %v - %v\n", c.OutputType, "attempt to POST again the payload without the wrong field")
-			err = c.Post(payload)
-			if err != nil {
-				c.setElasticSearchErrorMetrics()
-				return
-			}
-		}
+		c.setElasticSearchErrorMetrics()
+		log.Printf("[ERROR] : ElasticSearch - %v\n", err)
+		return
 	}
 
 	// Setting the success status
@@ -115,60 +77,29 @@ func (c *Client) ElasticsearchPost(falcopayload types.FalcoPayload) {
 	c.PromStats.Outputs.With(map[string]string{"destination": "elasticsearch", "status": OK}).Inc()
 }
 
-func (c *Client) ElasticsearchCreateIndexTemplate(config types.ElasticsearchOutputConfig) error {
-	d := c
-	indexExists, err := c.isIndexTemplateExist(config)
-	if err != nil {
-		log.Printf("[ERROR] : %v - %v\n", c.OutputType, err.Error())
-		return err
-	}
-	if indexExists {
-		log.Printf("[INFO]  : %v - %v\n", c.OutputType, "Index template already exists")
-		return nil
-	}
-
-	pattern := "-*"
-	if config.Suffix == None {
-		pattern = ""
-	}
-	m := strings.ReplaceAll(ESmapping, "${INDEX}", config.Index)
-	m = strings.ReplaceAll(m, "${PATTERN}", pattern)
-	m = strings.ReplaceAll(m, "${SHARDS}", fmt.Sprintf("%v", config.NumberOfShards))
-	m = strings.ReplaceAll(m, "${REPLICAS}", fmt.Sprintf("%v", config.NumberOfReplicas))
-	j := make(map[string]interface{})
-	if err := json.Unmarshal([]byte(m), &j); err != nil {
-		log.Printf("[ERROR] : %v - %v\n", c.OutputType, err.Error())
-		return err
-	}
-	// create the index template by PUT
-	if d.Put(j) != nil {
-		log.Printf("[ERROR] : %v - %v\n", c.OutputType, err.Error())
-		return err
-	}
-
-	log.Printf("[INFO]  : %v - %v\n", c.OutputType, "Index template created")
-	return nil
-}
-
-func (c *Client) isIndexTemplateExist(config types.ElasticsearchOutputConfig) (bool, error) {
-	clientCopy := c
-	var err error
-	u, err := url.Parse(fmt.Sprintf("%s/_index_template/falco", config.HostPort))
-	if err != nil {
-		return false, err
-	}
-	clientCopy.EndpointURL = u
-	if err := clientCopy.Get(); err != nil {
-		if err.Error() == "resource not found" {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
 // setElasticSearchErrorMetrics set the error stats
 func (c *Client) setElasticSearchErrorMetrics() {
 	go c.CountMetric(Outputs, 1, []string{"output:elasticsearch", "status:error"})
 	c.Stats.Elasticsearch.Add(Error, 1)
 	c.PromStats.Outputs.With(map[string]string{"destination": "elasticsearch", "status": Error}).Inc()
+}
+
+func (c *Client) WatchElasticsearchPostAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	fmt.Println("discord running")
+	for AlertRunning {
+		select {
+		case resp := <-conn:
+			fmt.Println("response \n", resp)
+			c.ElasticsearchPost(resp)
+		}
+	}
+	fmt.Println("discord stopped")
+	return nil
 }

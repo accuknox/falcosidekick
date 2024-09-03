@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/DataDog/datadog-go/statsd"
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl/plain"
 	"github.com/segmentio/kafka-go/sasl/scram"
@@ -145,10 +146,10 @@ func NewKafkaClient(config *types.Configuration, stats *types.Statistics, promSt
 }
 
 // KafkaProduce sends a message to a Apach Kafka Topic
-func (c *Client) KafkaProduce(falcopayload types.FalcoPayload) {
+func (c *Client) KafkaProduce(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Kafka.Add(Total, 1)
 
-	falcoMsg, err := json.Marshal(falcopayload)
+	Msg, err := json.Marshal(kubearmorpayload)
 	if err != nil {
 		c.incrKafkaErrorMetrics(1)
 		log.Printf("[ERROR] : Kafka - %v - %v\n", "failed to marshalling message", err.Error())
@@ -156,7 +157,7 @@ func (c *Client) KafkaProduce(falcopayload types.FalcoPayload) {
 	}
 
 	kafkaMsg := kafka.Message{
-		Value: falcoMsg,
+		Value: Msg,
 	}
 
 	// Errors are logged/captured via handleKafkaCompletion function, ignore here
@@ -194,4 +195,24 @@ func (c *Client) incrKafkaErrorMetrics(add int) {
 	go c.CountMetric(Outputs, int64(add), []string{"output:kafka", "status:error"})
 	c.Stats.Kafka.Add(Error, int64(add))
 	c.PromStats.Outputs.With(map[string]string{"destination": "kafka", "status": Error}).Add(float64(add))
+}
+
+func (c *Client) WatchKafkaProduceAlerts() error {
+	uid := uuid.Must(uuid.NewRandom()).String()
+
+	conn := make(chan types.KubearmorPayload, 1000)
+	defer close(conn)
+	addAlertStruct(uid, conn)
+	defer removeAlertStruct(uid)
+
+	fmt.Println("discord running")
+	for AlertRunning {
+		select {
+		case resp := <-conn:
+			fmt.Println("response \n", resp)
+			c.KafkaProduce(resp)
+		}
+	}
+	fmt.Println("discord stopped")
+	return nil
 }

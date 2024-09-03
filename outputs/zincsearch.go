@@ -10,7 +10,7 @@ import (
 )
 
 // ZincsearchPost posts event to Zincsearch
-func (c *Client) ZincsearchPost(falcopayload types.FalcoPayload) {
+func (c *Client) ZincsearchPost(kubearmorpayload types.KubearmorPayload) {
 	c.Stats.Zincsearch.Add(Total, 1)
 
 	if c.Config.Zincsearch.Username != "" && c.Config.Zincsearch.Password != "" {
@@ -20,7 +20,7 @@ func (c *Client) ZincsearchPost(falcopayload types.FalcoPayload) {
 	}
 
 	fmt.Println(c.EndpointURL)
-	err := c.Post(falcopayload)
+	err := c.Post(kubearmorpayload)
 	if err != nil {
 		c.setZincsearchErrorMetrics()
 		log.Printf("[ERROR] : Zincsearch - %v\n", err)

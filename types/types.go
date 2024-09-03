@@ -27,25 +27,19 @@ type FalcoPayload struct {
 	Hostname     string                 `json:"hostname,omitempty"`
 }
 
-func (f FalcoPayload) String() string {
-	j, _ := json.Marshal(f)
-	return string(j)
+// Payload is a struct to map kubearmor event json
+type KubearmorPayload struct {
+	Timestamp    int64                  ` json:"Timestamp,omitempty"`
+	UpdatedTime  string                 ` json:"UpdatedTime,omitempty"`
+	ClusterName  string                 ` json:"ClusterName,omitempty"`
+	Hostname     string                 ` json:"HostName,omitempty"`
+	EventType    string                 ` json:"EventType,omitempty"`
+	OutputFields map[string]interface{} `json:"Detail"`
 }
 
-func (f FalcoPayload) Check() bool {
-	if f.Priority.String() == "" {
-		return false
-	}
-	if f.Rule == "" {
-		return false
-	}
-	if f.Time.IsZero() {
-		return false
-	}
-	if len(f.OutputFields) == 0 {
-		return false
-	}
-	return true
+func (f KubearmorPayload) String() string {
+	j, _ := json.Marshal(f)
+	return string(j)
 }
 
 // Configuration is a struct to store configuration
@@ -63,6 +57,7 @@ type Configuration struct {
 	Templatedfields    map[string]string
 	Prometheus         prometheusOutputConfig
 	Slack              SlackOutputConfig
+	Email              EmailOutputConfig
 	Cliq               CliqOutputConfig
 	Mattermost         MattermostOutputConfig
 	Rocketchat         RocketchatOutputConfig
@@ -162,6 +157,18 @@ type SlackOutputConfig struct {
 	MessageFormatTemplate *template.Template
 	CheckCert             bool
 	MutualTLS             bool
+}
+
+// EmailOutputConfig represents parameters for Slack
+type EmailOutputConfig struct {
+	Host        string
+	Username    string
+	Password    string
+	Port        int
+	Sender      string
+	SenderEmail string
+	AlertUrl    string
+	HeaderLogo  string
 }
 
 // CliqOutputConfig represents parameters for Zoho Cliq

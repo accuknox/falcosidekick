@@ -27,9 +27,9 @@ func TestNewOpsgeniePayload(t *testing.T) {
 		Priority: "P5",
 	}
 
-	var f types.FalcoPayload
+	var f types.KubearmorPayload
 	require.Nil(t, json.Unmarshal([]byte(falcoTestInput), &f))
-	output := newOpsgeniePayload(f)
+	output := newOpsgeniePayload(f, &types.Configuration{})
 
 	require.Equal(t, output, expectedOutput)
 }
