@@ -16,14 +16,14 @@ var slackClient *outputs.Client
 var statsdClient, dogstatsdClient *statsd.Client
 
 func main() {
-	var e1 smtpOutputConfig
-	e1.From = "yajush@accuknox.com"
-	e1.To = "yajushsharma12@gmail.com"
-	e1.OutputFormat = outputs.HtmlTmpl
-	e1.HostPort = ""
-	e1.TLS = true
-	e1.User = ""
-	e1.
+	// var e1 types.smtpOutputConfig
+	// e1.From = "yajush@accuknox.com"
+	// e1.To = "yajushsharma12@gmail.com"
+	// e1.OutputFormat = outputs.HtmlTmpl
+	// e1.HostPort = ""
+	// e1.TLS = true
+	// e1.User = ""
+	// e1.AuthMechanism = ""
 
 	var t1 types.SlackOutputConfig
 	t1.WebhookURL = "https://hooks.slack.com/services/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"
